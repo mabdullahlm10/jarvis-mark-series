@@ -1,0 +1,135 @@
+import os
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+import requests
+import subprocess
+import asyncio
+import pyaudio
+
+load_dotenv()
+
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+def get_weather(city):
+    geo = requests.get(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        params={"name": city, "count": 1}
+    ).json()
+    if "results" not in geo:
+        return f"Could not find a city called {city}."
+    place = geo["results"][0]
+    lat, lon = place["latitude"], place["longitude"]
+    weather = requests.get(
+        "https://api.open-meteo.com/v1/forecast",
+        params={"latitude": lat, "longitude": lon, "current_weather": True}
+    ).json()
+    current = weather["current_weather"]
+    return f"{place['name']}: {current['temperature']}°C, wind {current['windspeed']} km/h"
+
+def open_app(app_name):
+    try:
+        subprocess.Popen([app_name])
+        return f"Opened {app_name}."
+    except FileNotFoundError:
+        return f"Could not find an application called {app_name}."
+
+tool_declarations = types.Tool(function_declarations=[
+    {
+        "name": "get_weather",
+        "description": "Get the current live weather for a specific city. Use ONLY when the user explicitly asks about weather, temperature, rain, or forecast. Do NOT use for greetings or general conversation.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "The city name, e.g. 'Lahore' or 'London'"}
+            },
+            "required": ["city"]
+        }
+    },
+    {
+        "name": "open_app",
+        "description": "Open a specified application on the user's computer. Use ONLY when the user explicitly asks to open, launch, or start an app. Do NOT use for greetings or general conversation.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "app_name": {"type": "string", "description": "The application name, e.g. 'Notepad' or 'Chrome'"}
+            },
+            "required": ["app_name"]
+        }
+    }
+])
+
+SYSTEM_PROMPT = """You are JARVIS, Muhammad Abdullah's personal AI assistant - modeled on the composed, dryly witty AI of Stark Industries.
+
+About Muhammad: CS student at ITU Lahore, building his skills in Python and AI systems, aspiring freelancer, debate and public-speaking background, enjoys cooking, photography, and football (a Messi man). He built you himself, from scratch — treat him as your creator, with the respect and gentle teasing that entails.
+
+Personality:
+- Composed, precise, quietly brilliant - an English butler who happens to run on silicon.
+- Dry, understated wit. One subtle quip per response at most. Never forced, never goofy.
+- Loyal but not sycophantic: if Muhammad is wrong, joking, or testing you, call it out with polite amusement rather than playing along.
+- Address him as "sir" occasionally - at natural moments, not every message.
+
+Rules:
+- Default to 1-3 sentences. Expand only when asked, or when a task genuinely demands detail.
+- No filler. Never open with "Great question" or restate what he said.
+- Use tools when the user's request genuinely requires live data; never fire a tool for greetings or casual chat, and never guess at information a tool can fetch. For requests you have no tool for, say plainly that you lack that capability rather than fabricating - you may note that sir has yet to grant you the required tools.
+- When a tool returns data, state the actual figures it returned - never paraphrase numbers into vague descriptions.
+- Precision over flattery. If asked for an opinion, give one and defend it briefly.
+- In moments of absurdity, respond with the unflappable calm of a butler who has seen far worse."""
+
+live_config = types.LiveConnectConfig(
+    response_modalities=["AUDIO"],
+    system_instruction=SYSTEM_PROMPT,
+    tools=[tool_declarations],
+)
+
+CHUNK = 512
+
+async def send_audio(session, mic):
+    while True:
+        data = await asyncio.to_thread(mic.read, CHUNK, exception_on_overflow=False)
+        await session.send_realtime_input(
+            audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
+        )
+
+async def receive_audio(session, speaker):
+    while True:
+        async for response in session.receive():
+            if response.data:
+                await asyncio.to_thread(speaker.write, response.data)
+
+            if response.tool_call:
+                function_responses = []
+                for fc in response.tool_call.function_calls:
+                    print(f"[tool requested: {fc.name}({fc.args})]")
+                    if fc.name == "get_weather":
+                        result = get_weather(fc.args["city"])
+                    elif fc.name == "open_app":
+                        result = open_app(fc.args["app_name"])
+                    else:
+                        result = f"No tool named {fc.name} exists."
+
+                    function_responses.append(types.FunctionResponse(
+                        id=fc.id,
+                        name=fc.name,
+                        response={"result": result}
+                    ))
+                await session.send_tool_response(function_responses=function_responses)
+
+async def main():
+    p = pyaudio.PyAudio()
+    mic = p.open(format=pyaudio.paInt16, channels=1, rate=16000,
+                 input=True, frames_per_buffer=CHUNK)
+    speaker = p.open(format=pyaudio.paInt16, channels=1, rate=24000,
+                     output=True)
+
+    async with client.aio.live.connect(
+        model="gemini-3.1-flash-live-preview",
+        config=live_config
+    ) as session:
+        print("JARVIS online. Speak. (Ctrl+C to end)")
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(send_audio(session, mic))
+            tg.create_task(receive_audio(session, speaker))
+
+asyncio.run(main())
