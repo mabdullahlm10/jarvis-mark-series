@@ -1,3 +1,4 @@
 .env
 .venv/
 *.mp3
+system_prompt.txt
