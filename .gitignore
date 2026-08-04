@@ -1,4 +1,15 @@
+# Secrets and private configuration
 .env
-.venv/
-*.mp3
 system_prompt.txt
+
+# Local runtime and conversation data
+*.mp3
+conversation_log.txt
+
+# Python environment and generated cache
+.venv/
+__pycache__/
+*.py[cod]
+
+# Private project documentation
+docs/private/
