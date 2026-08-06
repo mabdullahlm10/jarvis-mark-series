@@ -5,6 +5,7 @@ from google.genai import types
 import requests
 import subprocess
 import asyncio
+import datetime
 import pyaudio
 
 load_dotenv()
@@ -72,7 +73,19 @@ live_config = types.LiveConnectConfig(
     response_modalities=["AUDIO"],
     system_instruction=SYSTEM_PROMPT,
     tools=[tool_declarations],
+    input_audio_transcription={},
+    output_audio_transcription={},
 )
+
+LOG_FILE = "conversation_log.txt"
+
+def log_turn(label, text):
+    text = text.strip()
+    if not text:
+        return
+    timestamp = datetime.datetime.now().strftime("%H:%M")
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {label}: {text}\n")
 
 CHUNK = 512
 
@@ -84,10 +97,34 @@ async def send_audio(session, mic):
         )
 
 async def receive_audio(session, speaker):
+    user_buffer = ""
+    jarvis_buffer = ""
     while True:
         async for response in session.receive():
             if response.data:
                 await asyncio.to_thread(speaker.write, response.data)
+
+            if response.server_content:
+                sc = response.server_content
+
+                if sc.input_transcription and sc.input_transcription.text:
+                    user_buffer += sc.input_transcription.text
+                if sc.input_transcription and sc.input_transcription.finished:
+                    log_turn("You", user_buffer)
+                    user_buffer = ""
+
+                if sc.output_transcription and sc.output_transcription.text:
+                    if user_buffer:
+                        log_turn("You", user_buffer)
+                        user_buffer = ""
+                    jarvis_buffer += sc.output_transcription.text
+                if sc.output_transcription and sc.output_transcription.finished:
+                    log_turn("Jarvis", jarvis_buffer)
+                    jarvis_buffer = ""
+
+                if sc.turn_complete and jarvis_buffer:
+                    log_turn("Jarvis", jarvis_buffer)
+                    jarvis_buffer = ""
 
             if response.tool_call:
                 function_responses = []
@@ -108,6 +145,9 @@ async def receive_audio(session, speaker):
                 await session.send_tool_response(function_responses=function_responses)
 
 async def main():
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(f"=== Session started {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} ===\n")
+
     p = pyaudio.PyAudio()
     mic = p.open(format=pyaudio.paInt16, channels=1, rate=16000,
                  input=True, frames_per_buffer=CHUNK)

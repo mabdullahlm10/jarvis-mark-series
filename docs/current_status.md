@@ -1,10 +1,9 @@
 # Jarvis — Current Project Status
 
-**Last updated:** 2026-07-25
+**Last updated:** 2026-08-06
 
-**Verification state:** This status is based on the project handoff document
-and the current Git diff. Runtime behavior still needs to be verified before
-all claims are treated as confirmed.
+**Verification state:** The transcript-logging feature and user-buffer fallback
+have been verified through a live runtime test.
 
 ## Active implementation
 
@@ -17,41 +16,46 @@ all claims are treated as confirmed.
   - `get_weather`
   - `open_app`
 
-## Current active bug
+## Recently resolved — User transcription logging
 
-Jarvis's spoken responses are reportedly being written to
-`conversation_log.txt`, but the user's spoken input is reportedly not being
-logged.
+Jarvis previously logged its own spoken responses but did not log the user's
+spoken input.
 
-The current leading hypothesis is that
-`sc.input_transcription.finished` may not become `True` as expected.
+Runtime evidence showed that Gemini supplied input-transcription text without
+supplying a `finished=True` signal for the observed user turn. As a result,
+the text accumulated in `user_buffer`, but the original completion condition
+did not flush it to `conversation_log.txt`.
 
-This is still a hypothesis, not a confirmed cause.
+A fallback was added:
 
-## Current diagnostic instrumentation
+- The existing `input_transcription.finished` path remains.
+- When Jarvis begins producing output-transcription text, any non-empty
+  `user_buffer` is logged and cleared.
+- Clearing the buffer prevents duplicate logging if the original completion
+  path already ran.
 
-The current uncommitted `jarvis_mark4.py` diff contains temporary debug
-instrumentation:
+## Verification result
 
-`print(f"[DEBUG input_transcription] {sc.input_transcription!r}")`
+The feature was tested through a live Gemini session.
 
-This should remain until runtime evidence has been collected.
+Confirmed results:
 
-It must be removed before the transcript-logging feature is committed.
+- Exactly one `You:` entry was written.
+- Exactly one `Jarvis:` entry was written.
+- No duplicate user entry appeared.
+- The weather tool continued to execute successfully.
+- Temporary debug instrumentation was removed after verification.
 
-## Immediate next step after this documentation commit
+## Separate observed issue — Transcription accuracy
 
-1. Keep `jarvis_mark4.py` unstaged.
-2. Run `jarvis_mark4.py`.
-3. Speak one clear question.
-4. Allow Jarvis to respond.
-5. Stop the program.
-6. Review:
-   - the debug input-transcription output;
-   - `conversation_log.txt`;
-   - any terminal errors.
-7. Use that evidence to confirm or reject the current hypothesis.
-8. Only then propose the smallest fix.
+The displayed input transcription was not fully accurate during testing.
+
+The model still selected the correct weather tool and location, suggesting
+that the displayed transcription may not perfectly represent the audio
+understanding used by the live model.
+
+This is a separate issue from transcript logging and has not yet been
+investigated.
 
 ## Other unresolved checks
 
