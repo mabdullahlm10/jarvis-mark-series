@@ -149,18 +149,30 @@ async def main():
         f.write(f"=== Session started {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} ===\n")
 
     p = pyaudio.PyAudio()
-    mic = p.open(format=pyaudio.paInt16, channels=1, rate=16000,
-                 input=True, frames_per_buffer=CHUNK)
-    speaker = p.open(format=pyaudio.paInt16, channels=1, rate=24000,
-                     output=True)
+    mic = None
+    speaker = None
+    try:
+        mic = p.open(format=pyaudio.paInt16, channels=1, rate=16000,
+                     input=True, frames_per_buffer=CHUNK)
+        speaker = p.open(format=pyaudio.paInt16, channels=1, rate=24000,
+                         output=True)
 
-    async with client.aio.live.connect(
-        model="gemini-3.1-flash-live-preview",
-        config=live_config
-    ) as session:
-        print("JARVIS online. Speak. (Ctrl+C to end)")
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(send_audio(session, mic))
-            tg.create_task(receive_audio(session, speaker))
+        async with client.aio.live.connect(
+            model="gemini-3.1-flash-live-preview",
+            config=live_config
+        ) as session:
+            print("JARVIS online. Speak. (Ctrl+C to end)")
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(send_audio(session, mic))
+                tg.create_task(receive_audio(session, speaker))
+    finally:
+        if mic is not None:
+            mic.close()
+        if speaker is not None:
+            speaker.close()
+        p.terminate()
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+except KeyboardInterrupt:
+    print("\nJARVIS offline.")
